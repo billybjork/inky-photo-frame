@@ -7,6 +7,7 @@ from inky.auto import auto
 import boto3
 from io import BytesIO
 import random
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -31,49 +32,69 @@ def get_db_connection():
         print(f"Error connecting to the database: {e}")
         return None
 
-def fetch_random_image_uuid():
-    """Fetch a random UUID of an image from the database."""
+def query_images_by_month_day(month_day, limit=None):
+    """
+    Query images by the specified month_day in 'MM-DD' format.
+    If limit is provided, limit the number of results returned.
+    """
     conn = get_db_connection()
     if not conn:
-        return None
+        return []
 
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT uuid FROM assets 
-            WHERE image_proxy_name IS NOT NULL 
-            ORDER BY RANDOM() LIMIT 1;
-        """)
-        result = cursor.fetchone()
-        return result[0] if result else None
+        query = """
+        SELECT image_proxy_name, uuid, image_name, image_creation_date
+        FROM assets
+        WHERE TO_CHAR(image_creation_date, 'MM-DD') = %s
+          AND image_proxy_name IS NOT NULL
+        ORDER BY image_creation_date DESC;
+        """
+        cursor.execute(query, (month_day,))
+        results = cursor.fetchall()
+        if limit is not None:
+            results = results[:limit]
+        return results
     except Exception as e:
-        print(f"Error fetching random image UUID: {e}")
-        return None
+        print(f"Error querying images by date {month_day}: {e}")
+        return []
     finally:
         conn.close()
 
-def fetch_image_s3_key(uuid):
-    """Fetch the S3 object key of an image from the database by UUID."""
-    conn = get_db_connection()
-    if not conn:
-        return None
+def find_images_for_today_and_fallback():
+    """
+    Attempt to find images for today's date (by month-day).
+    If none found, fallback to previous days until images are found.
+    If found images for today's date, return all of them in their given order.
+    If fallback, return only the first 5 images found from the first day that has images.
+    """
+    today = datetime.now()
+    today_month_day = today.strftime('%m-%d')
 
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            SELECT image_proxy_name FROM assets 
-            WHERE uuid = %s AND image_proxy_name IS NOT NULL 
-            LIMIT 1;
-        """, (uuid,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    except Exception as e:
-        print(f"Error fetching image key: {e}")
-        return None
-    finally:
-        conn.close()
+    # Try today's date first
+    images = query_images_by_month_day(today_month_day)
+    if images:
+        # Found images for today's date; return all of them as-is
+        # No shuffle, just cycle in the order returned
+        return images, False  # False indicates not fallback
 
-def download_image_from_s3(s3_key):
+    # No images for today's date, fallback to previous days
+    # We'll go back up to 30 days to find some images
+    for i in range(1, 31):
+        fallback_date = today - timedelta(days=i)
+        fallback_md = fallback_date.strftime('%m-%d')
+        fallback_images = query_images_by_month_day(fallback_md)
+        if fallback_images:
+            # Take the first 5 images
+            fallback_images = fallback_images[:5]
+            # Shuffle them once
+            random.shuffle(fallback_images)
+            return fallback_images, True  # True indicates fallback used
+
+    # No images found even after fallback
+    return [], False
+
+def fetch_image_from_s3(s3_key):
     """Download the image from S3 using the object key."""
     s3 = boto3.client(
         's3',
@@ -119,34 +140,40 @@ def display_image(image):
 if __name__ == "__main__":
     print("Starting image rotation process...")
 
+    current_date_str = datetime.now().strftime('%Y-%m-%d')
+    images_to_cycle, fallback_used = find_images_for_today_and_fallback()
+
+    # images_to_cycle is a list of tuples: (image_proxy_name, uuid, image_name, image_creation_date)
+    # We'll just cycle through them in order.
+    index = 0
+
     while True:
-        # Step 1: Fetch a random image UUID from the database
-        uuid = fetch_random_image_uuid()
-        if not uuid:
-            print("No image UUID found in the database. Retrying in 5 minutes.")
-            time.sleep(300)  # Wait 5 minutes before retrying
+        # Check if the date changed (e.g., after midnight)
+        new_date_str = datetime.now().strftime('%Y-%m-%d')
+        if new_date_str != current_date_str:
+            # Date changed, re-fetch images
+            print("Date has changed. Fetching new images for the new day...")
+            images_to_cycle, fallback_used = find_images_for_today_and_fallback()
+            current_date_str = new_date_str
+            index = 0
+
+        if not images_to_cycle:
+            # No images found at all. Wait and try again.
+            print("No images found (even after fallback). Retrying in 5 minutes...")
+            time.sleep(300)
+            images_to_cycle, fallback_used = find_images_for_today_and_fallback()
             continue
 
-        print(f"Random UUID fetched: {uuid}")
+        # Get current image info
+        s3_key = images_to_cycle[index][0]  # image_proxy_name is at index 0
+        image = fetch_image_from_s3(s3_key)
+        if image:
+            display_image(image)
+        else:
+            print("Failed to fetch image. Will try the next one.")
 
-        # Step 2: Fetch the S3 object key from the database by UUID
-        s3_key = fetch_image_s3_key(uuid)
-        if not s3_key:
-            print(f"No image key found in the database for UUID: {uuid}")
-            time.sleep(300)  # Wait 5 minutes before retrying
-            continue
-
-        print(f"Image key fetched: {s3_key}")
-
-        # Step 3: Download the image from S3
-        image = download_image_from_s3(s3_key)
-        if not image:
-            print("Failed to download the image. Retrying in 5 minutes.")
-            time.sleep(300)  # Wait 5 minutes before retrying
-            continue
-
-        # Step 4: Display the image on the e-paper display
-        display_image(image)
+        # Move to next image
+        index = (index + 1) % len(images_to_cycle)
 
         # Wait 5 minutes before showing the next image
         print("Waiting 5 minutes before the next image...")

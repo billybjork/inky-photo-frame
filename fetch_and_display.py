@@ -2,7 +2,7 @@ import os
 import time
 import psycopg2
 from dotenv import load_dotenv
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw, ImageFont
 from inky.auto import auto
 import boto3
 from io import BytesIO
@@ -10,6 +10,9 @@ import random
 from datetime import datetime, timedelta
 
 load_dotenv()
+
+# Get the directory where the script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
@@ -74,12 +77,9 @@ def find_images_for_today_and_fallback():
     # Try today's date first
     images = query_images_by_month_day(today_month_day)
     if images:
-        # Found images for today's date; return all of them as-is
-        # No shuffle, just cycle in the order returned
-        return images, False  # False indicates not fallback
+        return images, False  # Not fallback
 
     # No images for today's date, fallback to previous days
-    # We'll go back up to 30 days to find some images
     for i in range(1, 31):
         fallback_date = today - timedelta(days=i)
         fallback_md = fallback_date.strftime('%m-%d')
@@ -89,9 +89,8 @@ def find_images_for_today_and_fallback():
             fallback_images = fallback_images[:5]
             # Shuffle them once
             random.shuffle(fallback_images)
-            return fallback_images, True  # True indicates fallback used
+            return fallback_images, True
 
-    # No images found even after fallback
     return [], False
 
 def fetch_image_from_s3(s3_key):
@@ -112,25 +111,99 @@ def fetch_image_from_s3(s3_key):
         return None
 
 def resize_image(image, target_resolution):
-    """Resize the image to fit the target resolution while maintaining aspect ratio."""
-    # Create a blank canvas with the target resolution and white background
-    canvas = Image.new("RGB", target_resolution, (255, 255, 255))
+    """
+    Resize the image to fit the target resolution while maintaining aspect ratio.
+    Returns the resized canvas, and also the x_offset, y_offset, and the resized image dimensions.
+    """
+    # Create a blank canvas with the target resolution and black background
+    canvas = Image.new("RGB", target_resolution, (0, 0, 0))
 
     # Resize the image while maintaining aspect ratio
-    image.thumbnail(target_resolution, Image.LANCZOS)
+    image_copy = image.copy()
+    image_copy.thumbnail(target_resolution, Image.LANCZOS)
 
     # Calculate position to center the image on the canvas
-    x_offset = (target_resolution[0] - image.width) // 2
-    y_offset = (target_resolution[1] - image.height) // 2
+    x_offset = (target_resolution[0] - image_copy.width) // 2
+    y_offset = (target_resolution[1] - image_copy.height) // 2
 
     # Paste the resized image onto the canvas
-    canvas.paste(image, (x_offset, y_offset))
-    return canvas
+    canvas.paste(image_copy, (x_offset, y_offset))
 
-def display_image(image):
-    """Resize the image and display it on the Inky Impression."""
+    return canvas, x_offset, y_offset, image_copy.width, image_copy.height
+
+def format_date_ordinal(date_obj):
+    """Format the date with an ordinal indicator (e.g., 'August 5th, 1997')."""
+    day = date_obj.day
+    # Special cases
+    if 11 <= day % 100 <= 13:
+        suffix = 'th'
+    else:
+        suffix_map = {1: 'st', 2: 'nd', 3: 'rd'}
+        suffix = suffix_map.get(day % 10, 'th')
+    return f"{date_obj.strftime('%B')} {day}{suffix}, {date_obj.year}"
+
+def choose_text_color_for_background(image, box):
+    """
+    Given an image and a box (tuple: (x1, y1, x2, y2)),
+    determine average brightness in that region and return 'black' or 'white'.
+    """
+    # Crop the region where text will be placed
+    region = image.crop(box)
+    # Convert to grayscale to measure brightness
+    gray = region.convert("L")
+    hist = gray.histogram()
+    # Compute weighted sum of pixel intensities
+    # pixel value * count
+    # Then divide by total pixels to get average brightness
+    total_pixels = sum(hist)
+    brightness = sum(i * hist[i] for i in range(256)) / total_pixels
+
+    # If the region is bright (above a threshold), use black text; otherwise white text
+    return "black" if brightness > 128 else "white"
+
+def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height):
+    """Overlay the formatted date text in the bottom-right corner of the displayed image area only."""
+    draw = ImageDraw.Draw(image)
+    
+    font_path = os.path.join(os.path.dirname(__file__), "DejaVuSerif.ttf")
+    font_size = 24
+    font = ImageFont.truetype(font_path, font_size)
+
+    date_text = format_date_ordinal(date_obj)
+
+    image_width, image_height = image.size
+    max_width = img_width // 3  # text should not exceed 1/3 of the image width
+
+    # Adjust font size if needed
+    while True:
+        text_bbox = font.getbbox(date_text)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        if text_width <= max_width or font_size <= 10:
+            break
+        font_size -= 2
+        font = ImageFont.truetype(font_path, font_size)
+
+    margin = 10
+    # Position text at the bottom-right of the image area (not the full canvas)
+    x_pos = x_offset + img_width - text_width - margin
+    y_pos = y_offset + img_height - text_height - margin
+
+    # Determine text color based on background brightness
+    # We'll use the exact text bounding box as reference area
+    text_box = (x_pos, y_pos, x_pos + text_width, y_pos + text_height)
+    text_color = choose_text_color_for_background(image, text_box)
+
+    draw.text((x_pos, y_pos), date_text, fill=text_color, font=font)
+
+    return image
+
+def display_image(image, image_date):
+    """Resize the image, add date overlay, and display it on the Inky Impression."""
     try:
-        resized_image = resize_image(image, DISPLAY_RESOLUTION)
+        resized_image, x_offset, y_offset, resized_w, resized_h = resize_image(image, DISPLAY_RESOLUTION)
+        if image_date:
+            resized_image = overlay_date_text(resized_image, image_date, x_offset, y_offset, resized_w, resized_h)
         display.set_image(resized_image)
         display.show()
         print("Image displayed successfully!")
@@ -143,38 +216,30 @@ if __name__ == "__main__":
     current_date_str = datetime.now().strftime('%Y-%m-%d')
     images_to_cycle, fallback_used = find_images_for_today_and_fallback()
 
-    # images_to_cycle is a list of tuples: (image_proxy_name, uuid, image_name, image_creation_date)
-    # We'll just cycle through them in order.
     index = 0
 
     while True:
-        # Check if the date changed (e.g., after midnight)
         new_date_str = datetime.now().strftime('%Y-%m-%d')
         if new_date_str != current_date_str:
-            # Date changed, re-fetch images
             print("Date has changed. Fetching new images for the new day...")
             images_to_cycle, fallback_used = find_images_for_today_and_fallback()
             current_date_str = new_date_str
             index = 0
 
         if not images_to_cycle:
-            # No images found at all. Wait and try again.
             print("No images found (even after fallback). Retrying in 5 minutes...")
             time.sleep(300)
             images_to_cycle, fallback_used = find_images_for_today_and_fallback()
             continue
 
-        # Get current image info
-        s3_key = images_to_cycle[index][0]  # image_proxy_name is at index 0
+        image_proxy_name, uuid_val, image_name, image_creation_date = images_to_cycle[index]
+        s3_key = image_proxy_name
         image = fetch_image_from_s3(s3_key)
         if image:
-            display_image(image)
+            display_image(image, image_creation_date)
         else:
             print("Failed to fetch image. Will try the next one.")
 
-        # Move to next image
         index = (index + 1) % len(images_to_cycle)
-
-        # Wait 5 minutes before showing the next image
         print("Waiting 5 minutes before the next image...")
         time.sleep(300)

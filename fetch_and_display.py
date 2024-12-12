@@ -162,39 +162,50 @@ def choose_text_color_for_background(image, box):
     return "black" if brightness > 128 else "white"
 
 def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height):
-    """Overlay the formatted date text in the bottom-right corner of the displayed image area only."""
+    """Overlay the formatted date text in the bottom-right corner and year in the top-left corner."""
     draw = ImageDraw.Draw(image)
-    
+
     font_path = os.path.join(os.path.dirname(__file__), "DejaVuSerif.ttf")
-    font_size = 24
-    font = ImageFont.truetype(font_path, font_size)
 
-    date_text = format_date_ordinal(date_obj)
+    # Fonts for month/day and year
+    month_day_font_size = 72  # Larger font for month/day
+    year_font_size = 48  # Moderately larger font for year
 
+    month_day_font = ImageFont.truetype(font_path, month_day_font_size)
+    year_font = ImageFont.truetype(font_path, year_font_size)
+
+    # Format the date text
+    formatted_date = format_date_ordinal(date_obj)
+    month_day_text, year_text = formatted_date.rsplit(", ", 1)
+
+    # Get image dimensions
     image_width, image_height = image.size
-    max_width = img_width // 3  # text should not exceed 1/3 of the image width
-
-    # Adjust font size if needed
-    while True:
-        text_bbox = font.getbbox(date_text)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        if text_width <= max_width or font_size <= 10:
-            break
-        font_size -= 2
-        font = ImageFont.truetype(font_path, font_size)
-
     margin = 10
-    # Position text at the bottom-right of the image area (not the full canvas)
-    x_pos = x_offset + img_width - text_width - margin
-    y_pos = y_offset + img_height - text_height - margin
 
-    # Determine text color based on background brightness
-    # We'll use the exact text bounding box as reference area
-    text_box = (x_pos, y_pos, x_pos + text_width, y_pos + text_height)
-    text_color = choose_text_color_for_background(image, text_box)
+    # Position for month/day (bottom-right)
+    month_day_bbox = month_day_font.getbbox(month_day_text)
+    month_day_width = month_day_bbox[2] - month_day_bbox[0]
+    month_day_height = month_day_bbox[3] - month_day_bbox[1]
+    month_day_x_pos = x_offset + img_width - month_day_width - margin
+    month_day_y_pos = y_offset + img_height - month_day_height - margin
 
-    draw.text((x_pos, y_pos), date_text, fill=text_color, font=font)
+    # Position for year (top-left)
+    year_bbox = year_font.getbbox(year_text)
+    year_width = year_bbox[2] - year_bbox[0]
+    year_height = year_bbox[3] - year_bbox[1]
+    year_x_pos = x_offset + margin
+    year_y_pos = y_offset + margin
+
+    # Determine text colors based on background brightness
+    month_day_box = (month_day_x_pos, month_day_y_pos, month_day_x_pos + month_day_width, month_day_y_pos + month_day_height)
+    month_day_color = choose_text_color_for_background(image, month_day_box)
+
+    year_box = (year_x_pos, year_y_pos, year_x_pos + year_width, year_y_pos + year_height)
+    year_color = choose_text_color_for_background(image, year_box)
+
+    # Draw the texts on the image
+    draw.text((month_day_x_pos, month_day_y_pos), month_day_text, fill=month_day_color, font=month_day_font)
+    draw.text((year_x_pos, year_y_pos), year_text, fill=year_color, font=year_font)
 
     return image
 
@@ -227,8 +238,8 @@ if __name__ == "__main__":
             index = 0
 
         if not images_to_cycle:
-            print("No images found (even after fallback). Retrying in 5 minutes...")
-            time.sleep(300)
+            print("No images found (even after fallback). Retrying in 30 minutes...")
+            time.sleep(1800)
             images_to_cycle, fallback_used = find_images_for_today_and_fallback()
             continue
 
@@ -241,5 +252,5 @@ if __name__ == "__main__":
             print("Failed to fetch image. Will try the next one.")
 
         index = (index + 1) % len(images_to_cycle)
-        print("Waiting 5 minutes before the next image...")
-        time.sleep(300)
+        print("Waiting 30 minutes before the next image...")
+        time.sleep(1800)

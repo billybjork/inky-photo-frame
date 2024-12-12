@@ -260,7 +260,7 @@ def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height
     year_font_size = 48  # Moderately larger font for year
 
     month_day_font = ImageFont.truetype(font_path, month_day_font_size)
-    year_font = ImageFont.truetype(font_path, year_font_size)
+    year_font_bold = ImageFont.truetype(font_path, year_font_size)  # Same font size for year but bold
 
     # Format the date text
     formatted_date = format_date_ordinal(date_obj)
@@ -270,15 +270,15 @@ def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height
     image_width, image_height = image.size
     margin = 10
 
-    # Position for month/day (bottom-right)
+    # Position for month/day (bottom-right) with added padding
     month_day_bbox = month_day_font.getbbox(month_day_text)
     month_day_width = month_day_bbox[2] - month_day_bbox[0]
     month_day_height = month_day_bbox[3] - month_day_bbox[1]
     month_day_x_pos = x_offset + img_width - month_day_width - margin
-    month_day_y_pos = y_offset + img_height - month_day_height - margin
+    month_day_y_pos = y_offset + img_height - month_day_height - (margin + 10)  # Add 10px padding from the bottom
 
     # Position for year (top-left)
-    year_bbox = year_font.getbbox(year_text)
+    year_bbox = year_font_bold.getbbox(year_text)
     year_width = year_bbox[2] - year_bbox[0]
     year_height = year_bbox[3] - year_bbox[1]
     year_x_pos = x_offset + margin
@@ -293,7 +293,7 @@ def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height
 
     # Draw the texts on the image
     draw.text((month_day_x_pos, month_day_y_pos), month_day_text, fill=month_day_color, font=month_day_font)
-    draw.text((year_x_pos, year_y_pos), year_text, fill=year_color, font=year_font)
+    draw.text((year_x_pos, year_y_pos), year_text, fill=year_color, font=year_font_bold)
 
     return image
 

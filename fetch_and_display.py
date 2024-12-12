@@ -110,12 +110,35 @@ def fetch_image_from_s3(s3_key):
         print(f"Error fetching image from S3: {e}")
         return None
 
+def get_average_color(image):
+    """
+    Compute the average RGB color of an image.
+    """
+    # Convert image to RGB if not already
+    image = image.convert("RGB")
+    # Get pixel data
+    pixels = list(image.getdata())
+    # Compute average
+    r = sum(p[0] for p in pixels) / len(pixels)
+    g = sum(p[1] for p in pixels) / len(pixels)
+    b = sum(p[2] for p in pixels) / len(pixels)
+    return (int(r), int(g), int(b))
+
 def resize_image(image, target_resolution):
     """
     Resize the image to fit the target resolution while maintaining aspect ratio.
-    Returns the resized canvas, and also the x_offset, y_offset, and the resized image dimensions.
+    Also apply letterboxing with average color derived from the image edges
+    to make the letterboxing less obvious.
+    
+    Returns:
+        - canvas (PIL.Image): The final image with the resized photo centered and letterboxing applied.
+        - x_offset (int): The x-position where the image was placed.
+        - y_offset (int): The y-position where the image was placed.
+        - resized_w (int): The width of the resized image.
+        - resized_h (int): The height of the resized image.
     """
-    # Create a blank canvas with the target resolution and black background
+
+    # Create a blank canvas (temporary black background)
     canvas = Image.new("RGB", target_resolution, (0, 0, 0))
 
     # Resize the image while maintaining aspect ratio
@@ -128,6 +151,60 @@ def resize_image(image, target_resolution):
 
     # Paste the resized image onto the canvas
     canvas.paste(image_copy, (x_offset, y_offset))
+
+    # Determine if letterboxing is needed
+    # If image_copy.width < target_resolution[0], we have vertical letterboxing (left/right)
+    # If image_copy.height < target_resolution[1], we have horizontal letterboxing (top/bottom)
+    need_top_bottom_box = image_copy.height < target_resolution[1]
+    need_left_right_box = image_copy.width < target_resolution[0]
+
+    # Apply letterboxing with average colors if needed
+    if need_top_bottom_box:
+        # Top strip: sample a horizontal band from the top edge of the image
+        # We'll take a small slice (e.g., 10px high) from the top of the image_copy
+        # and average its color.
+        top_slice_height = min(10, image_copy.height)  # to ensure slice is within image
+        top_slice = image_copy.crop((0, 0, image_copy.width, top_slice_height))
+        top_color = get_average_color(top_slice)
+
+        # Bottom slice: similarly take from bottom edge
+        bottom_slice_height = min(10, image_copy.height)
+        bottom_slice = image_copy.crop((0, image_copy.height - bottom_slice_height, image_copy.width, image_copy.height))
+        bottom_color = get_average_color(bottom_slice)
+
+        # Fill top area above the image
+        if y_offset > 0:
+            top_box = (0, 0, target_resolution[0], y_offset)
+            ImageDraw.Draw(canvas).rectangle(top_box, fill=top_color)
+
+        # Fill bottom area below the image
+        bottom_start = y_offset + image_copy.height
+        if bottom_start < target_resolution[1]:
+            bottom_box = (0, bottom_start, target_resolution[0], target_resolution[1])
+            ImageDraw.Draw(canvas).rectangle(bottom_box, fill=bottom_color)
+
+    if need_left_right_box:
+        # Left strip: sample a vertical band from the left edge of the image
+        # We'll take a small slice (e.g., 10px wide) from the left of the image_copy.
+        left_slice_width = min(10, image_copy.width)
+        left_slice = image_copy.crop((0, 0, left_slice_width, image_copy.height))
+        left_color = get_average_color(left_slice)
+
+        # Right strip: from the right edge
+        right_slice_width = min(10, image_copy.width)
+        right_slice = image_copy.crop((image_copy.width - right_slice_width, 0, image_copy.width, image_copy.height))
+        right_color = get_average_color(right_slice)
+
+        # Fill left area
+        if x_offset > 0:
+            left_box = (0, 0, x_offset, target_resolution[1])
+            ImageDraw.Draw(canvas).rectangle(left_box, fill=left_color)
+
+        # Fill right area
+        right_start = x_offset + image_copy.width
+        if right_start < target_resolution[0]:
+            right_box = (right_start, 0, target_resolution[0], target_resolution[1])
+            ImageDraw.Draw(canvas).rectangle(right_box, fill=right_color)
 
     return canvas, x_offset, y_offset, image_copy.width, image_copy.height
 

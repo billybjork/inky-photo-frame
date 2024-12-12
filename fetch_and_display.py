@@ -4,6 +4,7 @@ import psycopg2
 from dotenv import load_dotenv
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 from inky.auto import auto
+import RPi.GPIO as GPIO
 import boto3
 from io import BytesIO
 import random
@@ -34,6 +35,16 @@ def get_db_connection():
     except Exception as e:
         print(f"Error connecting to the database: {e}")
         return None
+
+def setup_button(pin=5):
+    """
+    Setup the GPIO pin for the "A" button input.
+    This uses BCM pin numbering. On the Inky Impression,
+    button A is often tied to BCM pin 5.
+    """
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    return pin
 
 def query_images_by_month_day(month_day, limit=None):
     """
@@ -299,35 +310,74 @@ def display_image(image, image_date):
         print(f"Error displaying image: {e}")
 
 if __name__ == "__main__":
-    print("Starting image rotation process...")
+    print("Starting image rotation process with manual shuffle...")
 
+    # Setup the button for manual shuffle
+    button_pin = setup_button()
+
+    # Initial setup for the day and images
     current_date_str = datetime.now().strftime('%Y-%m-%d')
     images_to_cycle, fallback_used = find_images_for_today_and_fallback()
-
     index = 0
 
-    while True:
-        new_date_str = datetime.now().strftime('%Y-%m-%d')
-        if new_date_str != current_date_str:
-            print("Date has changed. Fetching new images for the new day...")
-            images_to_cycle, fallback_used = find_images_for_today_and_fallback()
-            current_date_str = new_date_str
-            index = 0
+    try:
+        while True:
+            new_date_str = datetime.now().strftime('%Y-%m-%d')
+            if new_date_str != current_date_str:
+                print("Date has changed. Fetching new images for the new day...")
+                images_to_cycle, fallback_used = find_images_for_today_and_fallback()
+                current_date_str = new_date_str
+                index = 0
 
-        if not images_to_cycle:
-            print("No images found (even after fallback). Retrying in 30 minutes...")
-            time.sleep(1800)
-            images_to_cycle, fallback_used = find_images_for_today_and_fallback()
-            continue
+            if not images_to_cycle:
+                print("No images found (even after fallback). Retrying in 30 minutes...")
+                # Wait 30 minutes, checking for button presses
+                wait_seconds = 1800
+                for i in range(wait_seconds):
+                    if GPIO.input(button_pin) == GPIO.LOW:
+                        # Button pressed during the wait
+                        print("Button pressed! Attempting to refetch images now...")
+                        # Refetch images immediately due to manual request
+                        images_to_cycle, fallback_used = find_images_for_today_and_fallback()
+                        index = 0
+                        break
+                    time.sleep(1)
+                # After waiting or breaking due to button press, continue the loop
+                continue
 
-        image_proxy_name, uuid_val, image_name, image_creation_date = images_to_cycle[index]
-        s3_key = image_proxy_name
-        image = fetch_image_from_s3(s3_key)
-        if image:
-            display_image(image, image_creation_date)
-        else:
-            print("Failed to fetch image. Will try the next one.")
+            # Display the current image
+            image_proxy_name, uuid_val, image_name, image_creation_date = images_to_cycle[index]
+            s3_key = image_proxy_name
+            image = fetch_image_from_s3(s3_key)
+            if image:
+                display_image(image, image_creation_date)
+            else:
+                print("Failed to fetch image. Will try the next one.")
 
-        index = (index + 1) % len(images_to_cycle)
-        print("Waiting 30 minutes before the next image...")
-        time.sleep(1800)
+            # Move to the next image
+            index = (index + 1) % len(images_to_cycle)
+
+            print("Waiting 30 minutes before the next image...")
+            # Instead of a simple sleep, poll the button every second.
+            wait_seconds = 1800  # 30 minutes
+            button_pressed = False
+            for i in range(wait_seconds):
+                if GPIO.input(button_pin) == GPIO.LOW:
+                    print("Button pressed! Manually shuffling images...")
+                    # Shuffle images and reset index to start from a new random order
+                    random.shuffle(images_to_cycle)
+                    index = 0
+                    button_pressed = True
+                    break
+                time.sleep(1)
+
+            # If we broke out due to button press, we proceed to show the next image immediately
+            if button_pressed:
+                continue
+
+            # If not pressed, we just finished waiting 30 min, loop will continue to next image
+    except KeyboardInterrupt:
+        print("Exiting")
+    finally:
+        # Cleanup GPIO on exit
+        GPIO.cleanup()

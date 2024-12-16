@@ -250,21 +250,26 @@ def choose_text_color_for_background(image, box):
     return "black" if brightness > 128 else "white"
 
 def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height):
-    """Overlay the formatted date text in the bottom-right corner and year in the top-left corner."""
+    """Overlay the formatted date text in the bottom-right corner and years ago in the top-left corner."""
     draw = ImageDraw.Draw(image)
 
-    font_path = os.path.join(os.path.dirname(__file__), "DejaVuSerif.ttf")
+    font_path = os.path.join(os.path.dirname(__file__), "EBGaramond12-Regular.otf")
 
-    # Fonts for month/day and year
-    month_day_font_size = 72  # Larger font for month/day
-    year_font_size = 48  # Moderately larger font for year
+    # Fonts for month/day and years ago
+    month_day_font_size = 60  # Larger font for month/day
+    years_ago_font_size = 40  # Moderately larger font for years ago
 
     month_day_font = ImageFont.truetype(font_path, month_day_font_size)
-    year_font_bold = ImageFont.truetype(font_path, year_font_size)  # Same font size for year but bold
+    years_ago_font = ImageFont.truetype(font_path, years_ago_font_size)  # Same font size for years ago
 
     # Format the date text
     formatted_date = format_date_ordinal(date_obj)
-    month_day_text, year_text = formatted_date.rsplit(", ", 1)
+    month_day_text, _ = formatted_date.rsplit(", ", 1)
+
+    # Calculate "X years ago..." text
+    current_year = datetime.now().year
+    years_ago = current_year - date_obj.year
+    years_ago_text = f"{years_ago} years ago..." if years_ago > 1 else "Last year..."
 
     # Get image dimensions
     image_width, image_height = image.size
@@ -277,23 +282,23 @@ def overlay_date_text(image, date_obj, x_offset, y_offset, img_width, img_height
     month_day_x_pos = x_offset + img_width - month_day_width - margin
     month_day_y_pos = y_offset + img_height - month_day_height - (margin + 10)  # Add 10px padding from the bottom
 
-    # Position for year (top-left)
-    year_bbox = year_font_bold.getbbox(year_text)
-    year_width = year_bbox[2] - year_bbox[0]
-    year_height = year_bbox[3] - year_bbox[1]
-    year_x_pos = x_offset + margin
-    year_y_pos = y_offset + margin
+    # Position for years ago (top-left)
+    years_ago_bbox = years_ago_font.getbbox(years_ago_text)
+    years_ago_width = years_ago_bbox[2] - years_ago_bbox[0]
+    years_ago_height = years_ago_bbox[3] - years_ago_bbox[1]
+    years_ago_x_pos = x_offset + margin
+    years_ago_y_pos = y_offset + margin
 
     # Determine text colors based on background brightness
     month_day_box = (month_day_x_pos, month_day_y_pos, month_day_x_pos + month_day_width, month_day_y_pos + month_day_height)
     month_day_color = choose_text_color_for_background(image, month_day_box)
 
-    year_box = (year_x_pos, year_y_pos, year_x_pos + year_width, year_y_pos + year_height)
-    year_color = choose_text_color_for_background(image, year_box)
+    years_ago_box = (years_ago_x_pos, years_ago_y_pos, years_ago_x_pos + years_ago_width, years_ago_y_pos + years_ago_height)
+    years_ago_color = choose_text_color_for_background(image, years_ago_box)
 
     # Draw the texts on the image
     draw.text((month_day_x_pos, month_day_y_pos), month_day_text, fill=month_day_color, font=month_day_font)
-    draw.text((year_x_pos, year_y_pos), year_text, fill=year_color, font=year_font_bold)
+    draw.text((years_ago_x_pos, years_ago_y_pos), years_ago_text, fill=years_ago_color, font=years_ago_font)
 
     return image
 

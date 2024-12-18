@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 import psycopg2
 from dotenv import load_dotenv
 from PIL import Image, ImageOps, ImageDraw, ImageFont
@@ -30,6 +31,21 @@ IMAGE_FALLBACK_LIMIT = 5  # how many images we pick for fallback scenario
 display = auto()
 display.set_border(display.BLACK)
 DISPLAY_RESOLUTION = (800, 480)  # Resolution of Inky Impression
+
+# UUID for the digital frame (required to log displayed images independently for each frame)
+FRAME_ID_FILE = os.path.join(script_dir, "frame_id.txt")
+
+def get_frame_id():
+    if not os.path.exists(FRAME_ID_FILE):
+        frame_id = str(uuid.uuid4())
+        with open(FRAME_ID_FILE, "w") as f:
+            f.write(frame_id)
+    else:
+        with open(FRAME_ID_FILE, "r") as f:
+            frame_id = f.read().strip()
+    return frame_id
+
+FRAME_ID = get_frame_id()
 
 def get_db_connection():
     """Establish a connection to the PostgreSQL database."""
@@ -84,8 +100,11 @@ def check_image_displayed_recently(uuid_val, threshold_date):
         return False
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT COUNT(*) FROM display_logs WHERE uuid = %s AND display_date >= %s",
-                       (uuid_val, threshold_date))
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM display_logs 
+            WHERE uuid = %s AND display_date >= %s AND frame_id = %s
+        """, (uuid_val, threshold_date, FRAME_ID))
         count = cursor.fetchone()[0]
         return count > 0
     except Exception as e:
@@ -103,10 +122,16 @@ def log_image_displayed(uuid_val, display_date):
         return
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT COUNT(*) FROM display_logs WHERE uuid = %s AND display_date = %s", (uuid_val, display_date))
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM display_logs 
+            WHERE uuid = %s AND display_date = %s AND frame_id = %s
+        """, (uuid_val, display_date, FRAME_ID))
         if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO display_logs (uuid, display_date) VALUES (%s, %s)",
-                           (uuid_val, display_date))
+            cursor.execute("""
+                INSERT INTO display_logs (uuid, display_date, frame_id)
+                VALUES (%s, %s, %s)
+            """, (uuid_val, display_date, FRAME_ID))
             conn.commit()
     except Exception as e:
         print(f"Error logging display event: {e}")

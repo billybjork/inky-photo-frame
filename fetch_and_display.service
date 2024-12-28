@@ -3,7 +3,7 @@ Description=Fetch and Display Photos on Inky Impression
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/fetch_and_display.py
+ExecStart=/home/pi/inky-photoframe-venv/bin/python /home/pi/fetch_and_display.py
 Restart=always
 User=pi
 WorkingDirectory=/home/pi
